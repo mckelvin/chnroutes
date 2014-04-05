@@ -1,0 +1,8 @@
+cache/
+*.pyc
+ip-up
+ip-pre-up
+ip-down
+vpnup.bat
+vpndown.bat
+*.sw[op]
