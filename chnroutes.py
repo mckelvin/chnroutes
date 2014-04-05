@@ -1,10 +1,13 @@
 #!/usr/bin/env python
+# coding: utf-8
 
 import os
+import stat
 import re
 import urllib
 import sys
 import time
+import socket
 import argparse
 import math
 import textwrap
@@ -64,6 +67,10 @@ def generate_linux(metric):
         downfile.write('route del -net %s netmask %s\n' % (ip, mask))
 
     downfile.write('rm /tmp/vpn_oldgw\n')
+    upfile.close()
+    downfile.close()
+    for fpath in ('ip-pre-up', 'ip-down'):
+        os.chmod(fpath, os.stat(fpath).st_mode | stat.S_IEXEC)
 
     print ("For pptp only, please copy the file ip-pre-up to the "
            "folder/etc/ppp, and copy the file ip-down to the folder "
@@ -84,10 +91,6 @@ def generate_mac(metric):
     fi
 
     dscacheutil -flushcache
-
-    route add 10.0.0.0/8 "${OLDGW}"
-    route add 172.16.0.0/12 "${OLDGW}"
-    route add 192.168.0.0/16 "${OLDGW}"
     """)
 
     downscript_header = textwrap.dedent("""\
@@ -99,10 +102,6 @@ def generate_mac(metric):
     fi
 
     ODLGW=`cat /tmp/pptp_oldgw`
-
-    route delete 10.0.0.0/8 "${OLDGW}"
-    route delete 172.16.0.0/12 "${OLDGW}"
-    route delete 192.168.0.0/16 "${OLDGW}"
     """)
 
     upfile = open('ip-up', 'w')
@@ -120,6 +119,8 @@ def generate_mac(metric):
     downfile.write('\n\nrm /tmp/pptp_oldgw\n')
     upfile.close()
     downfile.close()
+    for fpath in ('ip-up', 'ip-down'):
+        os.chmod(fpath, os.stat(fpath).st_mode | stat.S_IEXEC)
 
     print ("For pptp on mac only, please copy ip-up and ip-down to the "
            "/etc/ppp folder, don't forget to make them executable with "
@@ -203,9 +204,25 @@ def generate_android(metric):
 
 
 def _process_record(item):
-    unit_items = item.split('|')
-    starting_ip = unit_items[3]
-    num_ip = int(unit_items[4])
+    if isinstance(item, str):
+        if item.startswith('apnic'):
+            unit_items = item.split('|')
+            starting_ip = unit_items[3]
+            num_ip = unit_items[4]
+        else:
+            starting_ip = item
+            num_ip = 1
+    elif isinstance(item, (tuple, list)):
+        if len(item) == 2:
+            starting_ip, len_mask = item
+            num_ip = 1 << (32 - len_mask)
+        elif len(item) == 1:
+            starting_ip, num_ip = item[0], 1
+
+    if starting_ip.strip('1234567890.'):
+        starting_ip = socket.gethostbyname(starting_ip)
+    if not isinstance(num_ip, (int, long)):
+        num_ip = int(num_ip)
 
     imask = 0xffffffff ^ (num_ip-1)
     #convert to string
@@ -242,9 +259,12 @@ def fetch_ip_data():
     cnregex = re.compile(r'apnic\|cn\|ipv4\|[0-9\.]+\|[0-9]+\|[0-9]+\|a.*',
                          re.IGNORECASE)
     cndata = cnregex.findall(data)
-
-    results = [_process_record(item) for item in cndata]
-    return results
+    try:
+        from local_config import special_case_data
+        cndata += special_case_data
+    except ImportError:
+        pass
+    return sorted({_process_record(item) for item in cndata})
 
 
 if __name__ == '__main__':
